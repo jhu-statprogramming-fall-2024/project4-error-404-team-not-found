@@ -29,16 +29,22 @@ The dashboard allows users to:
 The **WorldbankAnalysis** R package is the backbone of this project. It enables users to fetch, preprocess, and analyze World Bank data seamlessly:
 [WorldbankAnalysis GitHub Repository](https://github.com/ggui6809/WorldbankAnalysis)
 
+To install the development version of the package from GitHub:
+
+```r
+# Install the devtools package if not already installed
+install.packages("devtools")
+
+# Install WorldbankAnalysis
+devtools::install_github("ggui6809/WorldbankAnalysis")
+```
+
 ## How to Use
 1. Clone this repository:
    ```bash
-   git clone https://github.com/<your-group-repo>.git
+   git clone https://github.com/jhu-statprogramming-fall-2024/project4-error-404-team-not-found.git
    ```
-2. Install the **WorldbankAnalysis** R package:
-   ```R
-   # Install directly from GitHub
-   devtools::install_github("ggui6809/WorldbankAnalysis")
-   ```
+2. Install the **WorldbankAnalysis** R package as shown above.
 3. Open the `final_sample_analysis.Rmd` or `dashboard.Rmd` file in RStudio to explore the analysis pipeline and dashboard development.
 
 ## License
