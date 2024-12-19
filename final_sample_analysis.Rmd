@@ -83,7 +83,7 @@ cl <- makeCluster(num_cores)  # Create a cluster
 # Export required objects and functions to the cluster
 clusterExport(cl, varlist = c("fetch_paginated_data", "indicator_urls"))
 # Load required libraries on each cluster worker
-clusterEvalQ(cl, library(httr))
+clusterEvalQ(cl, library(httr2))
 clusterEvalQ(cl, library(dplyr))
 
 # Fetch data in parallel
