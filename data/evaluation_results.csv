@@ -1,0 +1,5 @@
+Model,RMSE,R2
+Random Forest,2.898,0.863
+Linear Regression,3.008,0.848
+Gradient Boosting,3.072,0.843
+SVM,3.511,0.789

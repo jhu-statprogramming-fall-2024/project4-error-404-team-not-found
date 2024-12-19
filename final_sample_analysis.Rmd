@@ -1,0 +1,711 @@
+---
+title: "final project sample analysis"
+output: html_document
+date: "2024-12-19"
+---
+
+# Final Project Sample Analysis
+
+```{r, warning=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(zoo)
+library(parallel)
+library(patchwork)
+library(knitr)
+library(gt)
+library(webshot)
+library(plotly)
+library(shiny)
+library(caret)
+library(Metrics)
+library(kableExtra)
+library(FactoMineR)
+```
+
+## 1. Data Fetching
+
+### Define the function to fetch data from an API
+
+```{r}
+fetch_paginated_data <- function(url) {
+  page <- 1
+  all_data <- list()
+  repeat {
+    paged_url <- paste0(url, "&page=", page) # Append page number to the URL
+    response <- GET(paged_url)
+    if (status_code(response) != 200) {
+      warning("Failed to retrieve data from page ", page)
+      break
+    }
+    data <- content(response, "parsed") # Parse the JSON content
+    if (length(data[[2]]) == 0) break   # Exit loop if no records are found
+    all_data <- c(all_data, data[[2]])  # Append current page data
+    page <- page + 1
+  }
+  # Convert the list of records to a tibble
+  lapply(all_data, function(record) {
+    tibble(
+      country = record$country$value,
+      countryiso3code = record$countryiso3code,
+      date = record$date,
+      value = record$value
+    )
+  }) %>% bind_rows()
+}
+```
+
+### Fetch and Save the Data
+
+```{r,eval=FALSE}
+# Define URLs for World Bank indicators
+indicator_urls <- list(
+  population = "https://api.worldbank.org/v2/country/all/indicator/SP.POP.TOTL?format=json",
+  gdp = "https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CD?format=json",
+  unemployment = "https://api.worldbank.org/v2/country/all/indicator/SL.UEM.TOTL.ZS?format=json",
+  inflation = "https://api.worldbank.org/v2/country/all/indicator/FP.CPI.TOTL.ZG?format=json",
+  exports = "https://api.worldbank.org/v2/country/all/indicator/NE.EXP.GNFS.CD?format=json",
+  gdp_per_capita = "https://api.worldbank.org/v2/country/all/indicator/NY.GDP.PCAP.CD?format=json",
+  life_expectancy = "https://api.worldbank.org/v2/country/all/indicator/SP.DYN.LE00.IN?format=json",
+  pm25 = "https://api.worldbank.org/v2/country/all/indicator/EN.ATM.PM25.MC.M3?format=json",
+  education_expenditure = "https://api.worldbank.org/v2/country/all/indicator/SE.XPD.TOTL.GD.ZS?format=json",
+  undernourishment = "https://api.worldbank.org/v2/country/all/indicator/SN.ITK.DEFC.ZS?format=json",
+  health_expenditure = "https://api.worldbank.org/v2/country/all/indicator/SH.XPD.CHEX.PC.CD?format=json",
+  infant_mortality = "https://api.worldbank.org/v2/country/all/indicator/SP.DYN.IMRT.IN?format=json"
+)
+
+# Parallel fetching of data
+num_cores <- 4 # Use one less than the number of available cores
+cl <- makeCluster(num_cores)  # Create a cluster
+
+# Export required objects and functions to the cluster
+clusterExport(cl, varlist = c("fetch_paginated_data", "indicator_urls"))
+# Load required libraries on each cluster worker
+clusterEvalQ(cl, library(httr))
+clusterEvalQ(cl, library(dplyr))
+
+# Fetch data in parallel
+indicator_data <- parLapply(cl, indicator_urls, fetch_paginated_data)
+
+# Stop the cluster
+stopCluster(cl)
+```
+
+```{r, eval=FALSE}
+# Rename and store each dataset
+population_data <- indicator_data$population %>% rename(population = value)
+gdp_data <- indicator_data$gdp %>% rename(gdp = value)
+unemployment_data <- indicator_data$unemployment %>% rename(unemployment_rate = value)
+inflation_data <- indicator_data$inflation %>% rename(inflation_rate = value)
+exports_data <- indicator_data$exports %>% rename(exports = value)
+gdp_per_capita_data <- indicator_data$gdp_per_capita %>% rename(gdp_per_capita = value)
+life_expectancy_data <- indicator_data$life_expectancy %>% rename(life_expectancy = value)
+pm25_data <- indicator_data$pm25 %>% rename(pm25_air_pollution = value)
+education_expenditure_data <- indicator_data$education_expenditure %>% rename(education_expenditure = value)
+undernourishment_data <- indicator_data$undernourishment %>% rename(undernourishment_rate = value)
+health_expenditure_data <- indicator_data$health_expenditure %>% rename(health_expenditure = value)
+infant_mortality_data <- indicator_data$infant_mortality %>% rename(infant_mortality_rate = value)
+
+# Merge all datasets
+merged_data <- population_data %>%
+  left_join(gdp_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(unemployment_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(inflation_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(exports_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(gdp_per_capita_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(life_expectancy_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(pm25_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(education_expenditure_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(undernourishment_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(health_expenditure_data, by = c("country", "countryiso3code", "date")) %>%
+  left_join(infant_mortality_data, by = c("country", "countryiso3code", "date")) 
+
+# Save the merged data
+write_csv(merged_data, "data/merged_data.csv")
+
+# Filter data for years from 2015 to 2022
+filtered_data <- merged_data %>%
+  filter(as.numeric(date) >= 2015 & as.numeric(date) <= 2022)
+
+# Pivot data for analysis
+expanded_data <- filtered_data %>%
+  pivot_wider(
+    names_from = date,
+    values_from = c(population, gdp, unemployment_rate, inflation_rate, exports, gdp_per_capita,
+                    life_expectancy, pm25_air_pollution, education_expenditure, undernourishment_rate,
+                    health_expenditure, infant_mortality_rate),
+    names_glue = "{.value}_{date}"
+  )
+
+# Save the expanded data
+write_csv(expanded_data, "data/expanded_filtered_merged_data.csv")
+```
+
+
+```{r}
+expanded_data <- read.csv("data/expanded_filtered_merged_data.csv")
+# Check for NA values in each column
+na_summary <- expanded_data %>%
+  summarise(across(everything(), ~ sum(is.na(.)), .names = "NA_count_{.col}"))
+
+# Optionally, save the NA summary to a CSV file for reference
+write_csv(na_summary, "data/na_summary.csv")
+```
+
+## 2. Data Preprocessing
+
+```{r, message=FALSE, warning=FALSE}
+expanded_data <- read_csv("data/expanded_filtered_merged_data.csv")
+```
+
+### NA value
+
+#### Check NA Values
+
+```{r}
+# Check for NA values in each column
+na_summary <- expanded_data %>%
+  summarise(across(everything(), ~ mean(is.na(.)) * 100, .names = "NA_percent_{.col}"))
+
+# Preview NA summary
+#print(na_summary)
+```
+
+#### Filter Columns with NA Proportion \> 50%
+
+```{r}
+# Filter out columns where NA proportion is greater than 50%
+filtered_data <- expanded_data %>%
+  select(where(~ mean(is.na(.)) <= 0.5))
+```
+
+#### Strategy for Imputation
+
+1.  Linear Interpolation (Time-Series Trend):
+
+-   Interpolate missing values for each variable (across years) within each country based on its existing data.
+
+2.  Fallback Imputation:
+
+-   If a country has NA for all years for a variable, impute using the global mean or median of that variable.
+
+```{r}
+reshape_to_long <- function(data) {
+  data_long <- data %>%
+    tidyr::pivot_longer(
+      cols = -c(country, countryiso3code),
+      names_to = "combined",
+      values_to = "value"
+    ) %>%
+    mutate(
+      variable = sub("_(\\d{4})$", "", combined),  # Extract everything before the last underscore
+      year = as.numeric(sub(".*_(\\d{4})$", "\\1", combined))  # Extract the year after the last underscore
+    ) %>%
+    select(-combined)  # Drop the combined column
+  return(data_long)
+}
+
+impute_long_data <- function(data_long) {
+  data_long <- data_long %>%
+    group_by(country, variable) %>%
+    arrange(year, .by_group = TRUE) %>%
+    mutate(
+      value = zoo::na.approx(value, na.rm = FALSE, rule = 2)  # Linear interpolation
+    ) %>%
+    ungroup() %>%
+    group_by(variable) %>%
+    mutate(
+      value = ifelse(is.na(value), mean(value, na.rm = TRUE), value)  # Global mean imputation
+    ) %>%
+    ungroup()
+  return(data_long)
+}
+
+reshape_to_wide <- function(data_long) {
+  data_wide <- data_long %>%
+    tidyr::pivot_wider(
+      names_from = c("variable", "year"),
+      values_from = "value",
+      names_glue = "{variable}_{year}"
+    )
+  return(data_wide)
+}
+
+
+impute_data <- function(data) {
+  data <- data %>%
+    select(where(~ mean(is.na(.)) < 0.5))  # Filter columns with less than 50% missing values
+
+  data_long <- reshape_to_long(data)  # Step 1: Reshape to long format
+  data_imputed <- impute_long_data(data_long)  # Step 2: Impute missing values
+  data_wide <- reshape_to_wide(data_imputed)  # Step 3: Reshape back to wide format
+
+  return(data_wide)
+}
+```
+
+```{r}
+# Step 1: Apply interpolation for each country
+imputed_data <- filtered_data %>%
+  group_modify(~ impute_data(.)) %>%
+  ungroup()
+
+# Step 2: Global mean/median imputation for columns with remaining NA
+imputed_data <- imputed_data %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+
+# Check for remaining NA values
+na_summary_after <- imputed_data %>%
+  summarise(across(everything(), ~ sum(is.na(.)), .names = "NA_count_{.col}"))
+
+# Save the final imputed data
+write_csv(imputed_data, "data/imputed_data.csv")
+```
+
+## 3. Exploratory Data Analysis
+
+### Summary Statistics for Each Column
+
+```{r}
+# Compute basic summary statistics
+summary_stats <- imputed_data %>%
+  summarise(across(where(is.numeric), list(
+    mean = ~mean(., na.rm = TRUE),
+    median = ~median(., na.rm = TRUE),
+    sd = ~sd(., na.rm = TRUE),
+    min = ~min(., na.rm = TRUE),
+    max = ~max(., na.rm = TRUE)
+  )))
+
+# Save summary statistics for review
+write_csv(summary_stats, "data/summary_statistics_imputed.csv")
+
+# Display summary statistics
+#print(summary_stats)
+```
+
+### Correlation Between Variables
+
+#### Correlation Matrix
+
+Use data from 2020 as an example.
+
+```{r}
+# Filter data for the year 2020
+data_2020 <- imputed_data %>%
+  select(country, countryiso3code, contains("_2020"))
+
+# Compute correlation matrix for numeric variables
+cor_matrix <- data_2020 %>%
+  select(-country, -countryiso3code) %>% # Exclude non-numeric columns
+  cor(use = "complete.obs")
+
+# Convert correlation matrix to long format for plotting
+cor_data <- as.data.frame(as.table(cor_matrix))
+
+cor_plot <- ggplot(cor_data, aes(Var1, Var2, fill = Freq)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Correlation Matrix (2020 Data)", fill = "Correlation")
+
+# Save the plot
+ggsave("image/correlation_matrix_2020_imputed.png", plot = cor_plot, width = 10, height = 8, create.dir = TRUE)
+```
+
+#### Strongly Correlated Variables with the Target Variable
+
+```{r, warning=FALSE}
+# Filter numeric columns and calculate correlation with life_expectancy_2020
+cor_with_target <- data_2020 %>%
+  select(-country, -countryiso3code) %>%  # Exclude non-numeric columns
+  summarise(across(everything(), ~ cor(.x, life_expectancy_2020, use = "complete.obs"))) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "correlation")
+
+# Filter variables with correlation larger than 0.7
+strong_correlations <- cor_with_target %>%
+  filter(abs(correlation) > 0.495)
+
+strong_correlations <- cor_with_target %>%
+  filter(abs(correlation) > 0.49) %>%
+  filter(variable != "life_expectancy_2020")%>%
+  mutate(variable = ifelse(variable == "undernourishment_rate_2020", "Undernourishment Rate", variable))%>%
+  mutate(variable = ifelse(variable == "health_expenditure_2020", "Health Expenditure", variable))%>%
+  mutate(variable = ifelse(variable == "infant_mortality_rate_2020", "Infant Mortality Rate", variable))%>%
+  mutate(variable = ifelse(variable == "gdp_per_capita_2020", "GDP per Capita", variable))
+
+# Create the gt table
+
+gt_table <- strong_correlations %>%
+  gt() %>%
+  tab_header(
+    title = "Strongly Correlated Variables with Life Expectancy"
+  ) %>%
+  fmt_number(columns = vars(correlation), decimals = 2) %>%
+  cols_align(align = "center") %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  )
+
+gt_table
+gtsave(gt_table, "image/strong_correlation_table.html")
+```
+
+### Distributions of Variables
+
+```{r}
+# Pivot data to long format for visualization
+long_data_2020 <- data_2020 %>%
+  pivot_longer(cols = -c(country, countryiso3code), names_to = "variable", values_to = "value")
+
+# Plot distributions of variables
+distribution_plot <- ggplot(long_data_2020, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  facet_wrap(~variable, scales = "free", ncol = 3) +
+  theme_minimal() +
+  labs(title = "Distributions of Variables (2020 Data)", x = "Value", y = "Frequency")
+distribution_plot
+
+# Save the plot
+ggsave("image/distribution_2020_imputed.png", plot = distribution_plot, width = 12, height = 10)
+```
+
+### Relationships Between Variables
+
+```{r}
+# Variables to plot
+variables_to_plot <- c("gdp_per_capita_2020", "undernourishment_rate_2020", 
+                       "health_expenditure_2020", "infant_mortality_rate_2020")
+
+# Create individual scatterplots
+plot1 <- ggplot(data_2020, aes(x = gdp_per_capita_2020, y = life_expectancy_2020)) +
+  geom_point(alpha = 0.7, color = "blue") +
+  theme_minimal() +
+  labs(title = "GDP per Capita vs Life Expectancy",
+       x = "GDP per Capita (2020)", y = "Life Expectancy (2020)")
+
+plot2 <- ggplot(data_2020, aes(x = undernourishment_rate_2020, y = life_expectancy_2020)) +
+  geom_point(alpha = 0.7, color = "red") +
+  theme_minimal() +
+  labs(title = "Undernourishment Rate vs Life Expectancy",
+       x = "Undernourishment Rate (2020)", y = "Life Expectancy (2020)")
+
+plot3 <- ggplot(data_2020, aes(x = health_expenditure_2020, y = life_expectancy_2020)) +
+  geom_point(alpha = 0.7, color = "green") +
+  theme_minimal() +
+  labs(title = "Health Expenditure vs Life Expectancy",
+       x = "Health Expenditure (2020)", y = "Life Expectancy (2020)")
+
+plot4 <- ggplot(data_2020, aes(x = infant_mortality_rate_2020, y = life_expectancy_2020)) +
+  geom_point(alpha = 0.7, color = "purple") +
+  theme_minimal() +
+  labs(title = "Infant Mortality Rate vs Life Expectancy",
+       x = "Infant Mortality Rate (2020)", y = "Life Expectancy (2020)")
+
+# Combine plots into a 2x2 grid
+combined_plot <- (plot1 + plot2) / (plot3 + plot4)
+combined_plot
+
+# Save the combined plot
+ggsave("image/relationships_life_expectancy_2020.png", plot = combined_plot, width = 16, height = 10)
+```
+
+#### Interactive Version of the Previous Plot
+
+```{r}
+# Standardize the data
+data_2020 <- data_2020 %>%
+  mutate(
+    gdp_per_capita_2020 = scale(gdp_per_capita_2020),
+    undernourishment_rate_2020 = scale(undernourishment_rate_2020),
+    health_expenditure_2020 = scale(health_expenditure_2020),
+    infant_mortality_rate_2020 = scale(infant_mortality_rate_2020)
+  )
+
+# Reshape the data to long format
+data_long <- data_2020 %>%
+  pivot_longer(
+    cols = c(gdp_per_capita_2020, undernourishment_rate_2020, health_expenditure_2020, infant_mortality_rate_2020),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  mutate(variable = factor(variable, levels = c(
+    "gdp_per_capita_2020", "undernourishment_rate_2020", "health_expenditure_2020", "infant_mortality_rate_2020"
+  )))
+
+static_plot <- ggplot(data_long, aes(x = value, y = life_expectancy_2020, color = variable)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Standardized Variables vs Life Expectancy (2020)",
+    x = "Standardized Variable Value",
+    y = "Life Expectancy (2020)",
+    color = "Variable"
+  ) +
+  scale_color_discrete(labels = c(
+    "gdp_per_capita_2020" = "GDP per Capita",
+    "undernourishment_rate_2020" = "Undernourishment Rate",
+    "health_expenditure_2020" = "Health Expenditure",
+    "infant_mortality_rate_2020" = "Infant Mortality Rate"
+  ))
+static_plot
+
+# Convert the static plot to an interactive plot
+interactive_plot <- ggplotly(static_plot, tooltip = c("x", "y", "color")) %>%
+  layout(legend = list(title = "Variable"),
+         xaxis = list(title = "Standardized Variable Value"),
+         yaxis = list(title = "Life Expectancy (2020)"),
+         legend = list(traceorder = "normal",
+                       itemsizing = "constant",
+                       itemclick = "toggle",
+                       itemdoubleclick = "toggleothers"))
+
+# Set the legend labels in ggplotly
+for (i in 1:length(interactive_plot$x$data)) {
+  interactive_plot$x$data[[i]]$name <- c(
+    "GDP per Capita",
+    "Undernourishment Rate",
+    "Health Expenditure",
+    "Infant Mortality Rate"
+  )[i]
+}
+
+interactive_plot
+
+ui <- fluidPage(
+  plotlyOutput("plot")
+)
+
+
+server <- function(input, output) {
+  output$plot <- renderPlotly({
+    interactive_plot
+  })
+}
+
+shinyApp(ui = ui, server = server)
+# Save the interactive plot
+htmlwidgets::saveWidget(interactive_plot, "image/interactive_plot.html")
+```
+
+## 4. Modelling
+
+### Read and Prepare the Data
+
+```{r, message=FALSE, warning=FALSE}
+# Read the imputed data
+imputed_data <- read_csv("data/imputed_data.csv")
+
+# Exclude other years' life_expectancy variables
+prepared_data <- imputed_data %>%
+  select(-starts_with("life_expectancy_"), life_expectancy_2022, country, countryiso3code) %>%
+  select(where(is.numeric)) # Keep only numeric variables
+
+# Split into predictors (X) and target (Y)
+target <- "life_expectancy_2022"
+X <- prepared_data %>% select(-all_of(target))
+Y <- prepared_data[[target]]
+```
+
+### Split Data into Train and Test Sets
+
+```{r}
+set.seed(123)  # For reproducibility
+train_index <- createDataPartition(Y, p = 0.8, list = FALSE)
+
+# Training data
+train_data <- prepared_data[train_index, ]
+X_train <- train_data %>% select(-life_expectancy_2022)
+Y_train <- train_data$life_expectancy_2022
+
+# Testing data
+test_data <- prepared_data[-train_index, ]
+X_test <- test_data %>% select(-life_expectancy_2022)
+Y_test <- test_data$life_expectancy_2022
+```
+
+### PCA Results on Training Data
+
+```{r}
+# Perform PCA on the training set predictors
+preProcess_pca <- preProcess(X_train, method = "pca", thresh = 0.95) # Retain 95% variance
+X_train_pca <- predict(preProcess_pca, X_train)
+
+# Apply PCA transformation to testing data
+X_test_pca <- predict(preProcess_pca, X_test)
+
+# Combine PCA-transformed training predictors with the target variable
+train_pca_data <- cbind(X_train_pca, life_expectancy_2022 = Y_train)
+
+print(preProcess_pca)
+```
+
+#### Scree Plot
+
+```{r, warning=FALSE}
+# Calculate variance explained
+explained_variance <- apply(X_train_pca, 2, var) / sum(apply(X_train_pca, 2, var)) * 100
+
+# Create a data frame for the scree plot
+scree_data <- data.frame(PC = seq_along(explained_variance), Variance = explained_variance)
+
+# Create the scree plot
+scree_plot <- ggplot(scree_data, aes(x = PC, y = Variance)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.8) +
+  theme_minimal() +
+  labs(
+    title = "Scree Plot (Explained Variance by PCA Components)",
+    x = "Principal Components",
+    y = "Variance Explained (%)"
+  ) +
+  geom_line(aes(group = 1), color = "red", size = 1) +
+  geom_point(color = "red", size = 2)
+
+# Save and display the scree plot
+print(scree_plot)
+ggsave("image/pca_scree_plot.png", plot = scree_plot, width = 10, height = 6)
+```
+
+#### Scatterplot of First Two Principal Components
+
+```{r}
+# Convert the PCA-transformed training data into a data frame
+pca_data <- as.data.frame(X_train_pca)
+pca_data$life_expectancy_2022 <- Y_train  # Add the target variable for coloring
+
+# Create scatterplot for the first two principal components
+scatter_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = life_expectancy_2022)) +
+  geom_point(alpha = 0.7, size = 3) +
+  scale_color_gradient(low = "blue", high = "red") +
+  theme_minimal() +
+  labs(
+    title = "PCA Results: First Two Principal Components",
+    x = "Principal Component 1",
+    y = "Principal Component 2",
+    color = "Life Expectancy (2022)"
+  )
+
+# Save and display the scatter plot
+print(scatter_plot)
+ggsave("image/pca_scatter_plot.png", plot = scatter_plot, width = 10, height = 6)
+```
+
+### Train Models Using Cross-Validation
+
+```{r}
+# Set up cross-validation
+control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+
+# Train Linear Regression
+model_lm <- train(life_expectancy_2022 ~ ., data = train_pca_data,
+                  method = "lm", trControl = control)
+
+# Train Random Forest
+model_rf <- train(life_expectancy_2022 ~ ., data = train_pca_data,
+                  method = "rf", trControl = control)
+
+# Train Support Vector Machine (Radial Kernel)
+model_svm <- train(life_expectancy_2022 ~ ., data = train_pca_data,
+                   method = "svmRadial", trControl = control)
+
+# Train Gradient Boosting Machine
+model_gbm <- train(life_expectancy_2022 ~ ., data = train_pca_data,
+                   method = "gbm", trControl = control, verbose = FALSE)
+
+# Summarize cross-validation results for all models
+cv_results <- resamples(list(
+  Linear_Regression = model_lm,
+  Random_Forest = model_rf,
+  SVM = model_svm,
+  Gradient_Boosting = model_gbm
+))
+
+# Display CV performance summary
+print(summary(cv_results))
+
+# Save boxplot comparing cross-validation results
+bwplot(cv_results)
+ggsave("image/cv_model_comparison.png", width = 10, height = 6)
+```
+
+## 5. Model Evaluation
+
+```{r}
+# Prepare test data
+test_pca_data <- cbind(X_test_pca, life_expectancy_2022 = Y_test)
+
+# Helper function to evaluate performance
+evaluate_model <- function(model, X_test, Y_test) {
+  predictions <- predict(model, newdata = X_test)
+  rmse_val <- rmse(Y_test, predictions)
+  r2_val <- cor(Y_test, predictions)^2
+  return(list(predictions = predictions, rmse = rmse_val, r2 = r2_val))
+}
+
+# Evaluate each model
+lm_eval <- evaluate_model(model_lm, X_test_pca, Y_test)
+rf_eval <- evaluate_model(model_rf, X_test_pca, Y_test)
+svm_eval <- evaluate_model(model_svm, X_test_pca, Y_test)
+gbm_eval <- evaluate_model(model_gbm, X_test_pca, Y_test)
+
+# Combine evaluation results into a data frame
+evaluation_results <- data.frame(
+  Model = c("Linear Regression", "Random Forest", "SVM", "Gradient Boosting"),
+  RMSE = c(lm_eval$rmse, rf_eval$rmse, svm_eval$rmse, gbm_eval$rmse),
+  R2 = c(lm_eval$r2, rf_eval$r2, svm_eval$r2, gbm_eval$r2)
+)
+
+evaluation_results$RMSE <- round(evaluation_results$RMSE, 3)
+evaluation_results$R2 <- round(evaluation_results$R2, 3)
+
+# Sort the data.frame by RMSE
+
+evaluation_results <- evaluation_results[order(evaluation_results$RMSE), ]
+
+# Create a nicely formatted table using kable and kableExtra
+
+evaluation_results %>%
+  kable("html", caption = "Model Evaluation Results", align = "c") %>%
+  kable_styling(full_width = T, position = "center") 
+
+
+# Save and display evaluation results
+write_csv(evaluation_results, "data/evaluation_results.csv")
+print(evaluation_results)
+```
+
+### Visualize Model Performance on Test Data
+
+```{r}
+# Prepare data for visualization
+test_results <- data.frame(
+  Actual = Y_test,
+  Linear_Regression = lm_eval$predictions,
+  Random_Forest = rf_eval$predictions,
+  SVM = svm_eval$predictions,
+  Gradient_Boosting = gbm_eval$predictions
+)
+
+# Create scatterplot comparing predictions and actual values
+scatter_plot <- ggplot(test_results, aes(x = Actual)) +
+  geom_point(aes(y = Linear_Regression, color = "Linear Regression")) +
+  geom_point(aes(y = Random_Forest, color = "Random Forest")) +
+  geom_point(aes(y = SVM, color = "SVM")) +
+  geom_point(aes(y = Gradient_Boosting, color = "Gradient Boosting")) +
+  theme_minimal() +
+  labs(
+    title = "Predictions vs Actual Life Expectancy (2022)",
+    x = "Actual Life Expectancy (2022)",
+    y = "Predicted Life Expectancy (2022)",
+    color = "Model"
+  )
+
+# Save and display the scatter plot
+ggsave("image/predictions_vs_actual.png", plot = scatter_plot, width = 10, height = 10)
+print(scatter_plot)
+```
