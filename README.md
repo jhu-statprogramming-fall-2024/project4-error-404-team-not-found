@@ -2,6 +2,13 @@
 
 Welcome to the **Life Expectancy Analysis** repository. This project provides a comprehensive framework for analyzing life expectancy data using World Bank indicators. It includes an R package, sample analysis files, and an interactive dashboard for exploring relationships between socioeconomic factors and life expectancy.
 
+## Team
+**Team Error 404: Team Not Found**  
+- Wenqing (Cathy) Zhang  
+- Guan Gui  
+- Enrui (Ryan) Wang  
+- Zixu (Jerry) Luo
+
 ## Contents
 
 ### Data
