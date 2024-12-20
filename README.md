@@ -39,6 +39,9 @@ install.packages("devtools")
 devtools::install_github("ggui6809/WorldbankAnalysis")
 ```
 
+### Report
+The file **`Final_Project_Report.pdf`** contains a detailed description of the project's objectives, methodology, and findings. This document serves as a comprehensive reference for understanding the analytical approaches and results.
+
 ## How to Use
 1. Clone this repository:
    ```bash
